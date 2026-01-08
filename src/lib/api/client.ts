@@ -160,7 +160,7 @@ export const roomsApi = {
     return data;
   },
 
-  update: async (id: number, room: RoomUpdate): Promise<Room> => {
+  update: async (id: number | string, room: RoomUpdate): Promise<Room> => {
     const { data } = await createClient().put(`/api/rooms/${id}`, room);
     return data;
   },

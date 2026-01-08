@@ -11,7 +11,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { floorsApi } from '@/lib/api/client';
+import { floorsApi, getApiUrl } from '@/lib/api/client';
 import { Floor, FloorCreate } from '@/lib/api/types';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
@@ -23,6 +23,14 @@ export default function FloorsPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [newFloor, setNewFloor] = useState<FloorCreate>({ name: '', floor_number: 1 });
   const navigate = useNavigate();
+
+  const resolveMediaUrl = (url: string) => {
+    if (!url) return url;
+    if (/^https?:\/\//i.test(url)) return url;
+    const base = getApiUrl().replace(/\/$/, '');
+    const path = url.startsWith('/') ? url : `/${url}`;
+    return `${base}${path}`;
+  };
 
   const fetchFloors = async () => {
     try {
@@ -150,14 +158,20 @@ export default function FloorsPage() {
                 'animate-fade-in'
               )}
               style={{ animationDelay: `${index * 50}ms` }}
-              onClick={() => navigate(`/floors/${floor.id}/edit`)}
+              onClick={(e) => {
+                const el = e.target as HTMLElement;
+                // Upload/Delete tugmalari bosilganda editga o'tib ketmasin
+                if (el.closest('button, input, label, [data-stop-nav]')) return;
+                navigate(`/floors/${floor.id}/edit`);
+              }}
             >
               {/* Image Preview */}
-              <div className="aspect-video bg-muted relative overflow-hidden">
+              <div className="aspect-video bg-muted relative overflow-hidden" data-stop-nav>
                 {floor.image_url ? (
                   <img
-                    src={floor.image_url}
+                    src={resolveMediaUrl(floor.image_url)}
                     alt={floor.name}
+                    loading="lazy"
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -170,16 +184,24 @@ export default function FloorsPage() {
                 <div className="absolute inset-0 bg-gradient-to-t from-background/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                 
                 {/* Actions */}
-                <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <label onClick={(e) => e.stopPropagation()}>
+                <div className="absolute bottom-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity" data-stop-nav>
+                  <label
+                    data-stop-nav
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                  >
                     <input
                       type="file"
                       accept="image/*"
                       className="hidden"
                       onChange={(e) => {
                         e.stopPropagation();
-                        if (e.target.files?.[0]) {
-                          handleImageUpload(floor.id, e.target.files[0]);
+                        const file = e.target.files?.[0];
+                        // bir xil faylni qayta tanlash uchun
+                        e.currentTarget.value = '';
+                        if (file) {
+                          handleImageUpload(floor.id, file);
                         }
                       }}
                     />

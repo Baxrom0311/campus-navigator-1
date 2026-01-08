@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { floorsApi, waypointsApi, connectionsApi, roomsApi } from '@/lib/api/client';
+import { floorsApi, waypointsApi, connectionsApi, roomsApi, getApiUrl } from '@/lib/api/client';
 import { Floor, Waypoint, Connection, Room, WaypointType, WaypointCreate, ConnectionCreate } from '@/lib/api/types';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
@@ -121,16 +121,23 @@ export default function FloorEditorPage() {
   useEffect(() => {
     if (!fabricCanvas || !floor?.image_url) return;
 
-    FabricImage.fromURL(floor.image_url, { crossOrigin: 'anonymous' }).then((img) => {
+    const resolveMediaUrl = (url: string) => {
+      if (/^https?:\/\//i.test(url)) return url;
+      const base = getApiUrl().replace(/\/$/, '');
+      const path = url.startsWith('/') ? url : `/${url}`;
+      return `${base}${path}`;
+    };
+
+    const imageUrl = resolveMediaUrl(floor.image_url);
+
+    FabricImage.fromURL(imageUrl, { crossOrigin: 'anonymous' }).then((img) => {
       // Scale image to fit canvas
       const canvasWidth = fabricCanvas.width || 1200;
       const canvasHeight = fabricCanvas.height || 800;
-      
-      const scale = Math.min(
-        canvasWidth / (img.width || 1),
-        canvasHeight / (img.height || 1)
-      ) * 0.9;
-      
+
+      const scale =
+        Math.min(canvasWidth / (img.width || 1), canvasHeight / (img.height || 1)) * 0.9;
+
       img.set({
         scaleX: scale,
         scaleY: scale,
@@ -139,7 +146,7 @@ export default function FloorEditorPage() {
         selectable: false,
         evented: false,
       });
-      
+
       fabricCanvas.add(img);
       fabricCanvas.sendObjectToBack(img);
       fabricCanvas.renderAll();
@@ -421,20 +428,19 @@ export default function FloorEditorPage() {
   const handleLinkRoom = async (roomId: string) => {
     if (!editingWaypoint) return;
 
-    const roomIdNum = parseInt(roomId);
-    const room = rooms.find((r) => r.id === roomIdNum);
+    // Backend id string yoki integer bo'lishi mumkin; requestni har ikki holatda yuboramiz
+    const room = rooms.find((r) => String(r.id) === roomId);
     if (!room) return;
 
     try {
-      // Update the room's waypoint_id via API
-      await roomsApi.update(roomIdNum, { waypoint_id: editingWaypoint.id });
-      
+      await roomsApi.update(roomId, { waypoint_id: editingWaypoint.id });
+
       setRooms((prev) =>
         prev.map((r) =>
-          r.id === roomIdNum ? { ...r, waypoint_id: editingWaypoint.id } : r
+          String(r.id) === roomId ? { ...r, waypoint_id: editingWaypoint.id } : r
         )
       );
-      
+
       toast.success(`"${room.name}" xonasi bog'landi`);
     } catch (error) {
       toast.error("Xonani bog'lashda xato");
