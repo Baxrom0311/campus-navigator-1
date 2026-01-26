@@ -100,9 +100,9 @@ export interface RoomUpdate {
 
 export interface NavigationRequest {
   start_waypoint_id?: string | null;
-  start_room_id?: string | null;
+  start_room_id?: number | null;
   end_waypoint_id?: string | null;
-  end_room_id?: string | null;
+  end_room_id?: number | null;
   kiosk_id?: string | null;
 }
 
@@ -123,25 +123,29 @@ export interface NavigationResponse {
   estimated_time_minutes: number;
 }
 
-// Kiosk Types
+// Kiosk Types - Backend model: { id:number, name:string, floor_id:number, waypoint_id:string, description?:string }
 export interface Kiosk {
-  id: string;
+  id: number;
   name: string;
-  waypoint_id: string;
   floor_id: number;
-  is_active: boolean;
-  idle_timeout: number;
-  language: string;
+  waypoint_id: string;
+  description?: string | null;
+  is_active?: boolean;
+  created_at?: string;
 }
 
 export interface KioskCreate {
-  id: string;
   name: string;
-  waypoint_id: string;
   floor_id: number;
-  is_active?: boolean;
-  idle_timeout?: number;
-  language?: string;
+  waypoint_id: string;
+  description?: string | null;
+}
+
+export interface KioskUpdate {
+  name?: string | null;
+  floor_id?: number | null;
+  waypoint_id?: string | null;
+  description?: string | null;
 }
 
 export interface KioskConfig {

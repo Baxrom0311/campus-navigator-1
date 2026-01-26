@@ -1,18 +1,13 @@
-import { useState, useEffect } from 'react';
-import { Search, Navigation, MapPin, Clock, ArrowRight } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Search, Navigation, MapPin, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Canvas as FabricCanvas, FabricImage, Circle, Polyline } from 'fabric';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { roomsApi, navigationApi, floorsApi } from '@/lib/api/client';
-import { Room, Floor, NavigationResponse } from '@/lib/api/types';
+import { Slider } from '@/components/ui/slider';
+import { roomsApi, navigationApi, floorsApi, waypointsApi, getApiUrl } from '@/lib/api/client';
+import { Room, Floor, NavigationResponse, PathStep, Waypoint } from '@/lib/api/types';
 import { useAppStore } from '@/lib/store';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -27,8 +22,17 @@ export default function NavigationPage() {
   const [navigationResult, setNavigationResult] = useState<NavigationResponse | null>(null);
   const [navigating, setNavigating] = useState(false);
   
+  // Floor visualization state
+  const [currentFloorIndex, setCurrentFloorIndex] = useState(0);
+  const [floorsInPath, setFloorsInPath] = useState<number[]>([]);
+  const [floorWaypoints, setFloorWaypoints] = useState<Record<number, Waypoint[]>>({});
+  
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
+  
   const { kioskWaypointId } = useAppStore();
 
+  // Fetch initial data
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -48,6 +52,25 @@ export default function NavigationPage() {
     fetchData();
   }, []);
 
+  // Initialize canvas
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const canvas = new FabricCanvas(canvasRef.current, {
+      width: 700,
+      height: 500,
+      backgroundColor: '#1a1a2e',
+      selection: false,
+    });
+
+    setFabricCanvas(canvas);
+
+    return () => {
+      canvas.dispose();
+    };
+  }, []);
+
+  // Search effect
   useEffect(() => {
     if (searchQuery.length > 0) {
       const results = rooms.filter((room) =>
@@ -58,6 +81,171 @@ export default function NavigationPage() {
       setSearchResults([]);
     }
   }, [searchQuery, rooms]);
+
+  // Resolve media URL helper
+  const resolveMediaUrl = useCallback((url: string) => {
+    if (/^https?:\/\//i.test(url)) return url;
+    const base = getApiUrl().replace(/\/$/, '');
+    const path = url.startsWith('/') ? url : `/${url}`;
+    return `${base}${path}`;
+  }, []);
+
+  // Get unique floors from path
+  const getFloorsInPath = useCallback((path: PathStep[]): number[] => {
+    const floorIds = [...new Set(path.map((step) => step.floor_id))];
+    return floorIds.sort((a, b) => a - b);
+  }, []);
+
+  // Fetch waypoints for all floors in path
+  const fetchFloorWaypoints = useCallback(async (floorIds: number[]) => {
+    const waypointsMap: Record<number, Waypoint[]> = {};
+    await Promise.all(
+      floorIds.map(async (floorId) => {
+        try {
+          waypointsMap[floorId] = await waypointsApi.getByFloor(floorId);
+        } catch {
+          waypointsMap[floorId] = [];
+        }
+      })
+    );
+    setFloorWaypoints(waypointsMap);
+  }, []);
+
+  // Draw the current floor with path
+  const drawFloorWithPath = useCallback(async () => {
+    if (!fabricCanvas || !navigationResult || floorsInPath.length === 0) return;
+
+    const currentFloorId = floorsInPath[currentFloorIndex];
+    const floor = floors.find((f) => f.id === currentFloorId);
+    if (!floor) return;
+
+    // Clear canvas
+    fabricCanvas.clear();
+    fabricCanvas.backgroundColor = '#1a1a2e';
+
+    // Get path steps for this floor
+    const floorPathSteps = navigationResult.path.filter(
+      (step) => step.floor_id === currentFloorId
+    );
+
+    // Load floor image
+    if (floor.image_url) {
+      const imageUrl = resolveMediaUrl(floor.image_url);
+      
+      try {
+        const img = await FabricImage.fromURL(imageUrl, { crossOrigin: 'anonymous' });
+        const canvasWidth = fabricCanvas.width || 700;
+        const canvasHeight = fabricCanvas.height || 500;
+        
+        const scale = Math.min(
+          canvasWidth / (img.width || 1),
+          canvasHeight / (img.height || 1)
+        ) * 0.95;
+
+        const offsetX = (canvasWidth - (img.width || 0) * scale) / 2;
+        const offsetY = (canvasHeight - (img.height || 0) * scale) / 2;
+
+        img.set({
+          scaleX: scale,
+          scaleY: scale,
+          left: offsetX,
+          top: offsetY,
+          selectable: false,
+          evented: false,
+          opacity: 0.7,
+        });
+
+        fabricCanvas.add(img);
+        fabricCanvas.sendObjectToBack(img);
+
+        // Draw path on this floor
+        if (floorPathSteps.length >= 2) {
+          const points = floorPathSteps.map((step) => ({
+            x: step.x * scale + offsetX,
+            y: step.y * scale + offsetY,
+          }));
+
+          const pathLine = new Polyline(points, {
+            stroke: '#22C55E',
+            strokeWidth: 4,
+            fill: 'transparent',
+            selectable: false,
+            evented: false,
+            strokeDashArray: [10, 5],
+          });
+
+          fabricCanvas.add(pathLine);
+
+          // Start marker
+          const startMarker = new Circle({
+            left: points[0].x,
+            top: points[0].y,
+            radius: 10,
+            fill: '#3B82F6',
+            stroke: '#fff',
+            strokeWidth: 3,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+          });
+
+          // End marker
+          const endMarker = new Circle({
+            left: points[points.length - 1].x,
+            top: points[points.length - 1].y,
+            radius: 10,
+            fill: '#22C55E',
+            stroke: '#fff',
+            strokeWidth: 3,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+          });
+
+          fabricCanvas.add(startMarker);
+          fabricCanvas.add(endMarker);
+        } else if (floorPathSteps.length === 1) {
+          // Single point on floor
+          const point = floorPathSteps[0];
+          const marker = new Circle({
+            left: point.x * scale + offsetX,
+            top: point.y * scale + offsetY,
+            radius: 10,
+            fill: '#F59E0B',
+            stroke: '#fff',
+            strokeWidth: 3,
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+          });
+          fabricCanvas.add(marker);
+        }
+
+        fabricCanvas.renderAll();
+      } catch (error) {
+        console.error('Error loading floor image:', error);
+      }
+    }
+  }, [fabricCanvas, navigationResult, floorsInPath, currentFloorIndex, floors, resolveMediaUrl]);
+
+  // Update canvas when floor changes
+  useEffect(() => {
+    drawFloorWithPath();
+  }, [drawFloorWithPath]);
+
+  // Auto-advance floors
+  useEffect(() => {
+    if (!navigationResult || floorsInPath.length <= 1) return;
+
+    const interval = setInterval(() => {
+      setCurrentFloorIndex((prev) => (prev + 1) % floorsInPath.length);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [navigationResult, floorsInPath.length]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -82,12 +270,21 @@ export default function NavigationPage() {
     try {
       const result = await navigationApi.findPath({
         start_waypoint_id: kioskWaypointId,
-        end_room_id: room.id.toString(),
+        end_room_id: room.id,
       });
       setNavigationResult(result);
+
+      // Get floors in path
+      const floorIds = getFloorsInPath(result.path);
+      setFloorsInPath(floorIds);
+      setCurrentFloorIndex(0);
+
+      // Fetch waypoints for these floors
+      await fetchFloorWaypoints(floorIds);
     } catch (error) {
       toast.error("Yo'l topilmadi");
       setNavigationResult(null);
+      setFloorsInPath([]);
     } finally {
       setNavigating(false);
     }
@@ -96,6 +293,14 @@ export default function NavigationPage() {
   const getFloorName = (floorId: number) => {
     const floor = floors.find((f) => f.id === floorId);
     return floor?.name || `Qavat ${floorId}`;
+  };
+
+  const handlePrevFloor = () => {
+    setCurrentFloorIndex((prev) => Math.max(0, prev - 1));
+  };
+
+  const handleNextFloor = () => {
+    setCurrentFloorIndex((prev) => Math.min(floorsInPath.length - 1, prev + 1));
   };
 
   if (loading) {
@@ -111,7 +316,7 @@ export default function NavigationPage() {
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-foreground">Navigatsiya</h1>
         <p className="text-muted-foreground mt-1">
-          Xonani qidiring va yo'lni toping
+          Xonani qidiring va yo'lni ko'ring
         </p>
       </div>
 
@@ -145,7 +350,7 @@ export default function NavigationPage() {
                   <Label className="text-xs uppercase tracking-wider text-muted-foreground">
                     Natijalar
                   </Label>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
                     {searchResults.map((room) => (
                       <Card
                         key={room.id}
@@ -182,37 +387,10 @@ export default function NavigationPage() {
             </div>
           </Card>
 
-          {/* Kiosk Status */}
-          <Card className="p-4">
-            <div className="flex items-center gap-3">
-              <div className={cn(
-                'w-3 h-3 rounded-full',
-                kioskWaypointId ? 'bg-success' : 'bg-warning'
-              )} />
-              <div className="flex-1">
-                <p className="text-sm font-medium">
-                  {kioskWaypointId ? 'Kiosk joylashuvi belgilangan' : 'Kiosk joylashuvi belgilanmagan'}
-                </p>
-                {kioskWaypointId && (
-                  <p className="text-xs text-muted-foreground">ID: {kioskWaypointId}</p>
-                )}
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        {/* Navigation Result */}
-        <div>
-          {navigating ? (
-            <Card className="p-12 text-center">
-              <div className="animate-pulse">
-                <Navigation className="w-12 h-12 mx-auto text-primary mb-4" />
-                <p className="text-muted-foreground">Yo'l hisoblanmoqda...</p>
-              </div>
-            </Card>
-          ) : navigationResult ? (
+          {/* Navigation Stats */}
+          {navigationResult && (
             <Card className="p-6">
-              <div className="flex items-center gap-3 mb-6">
+              <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-lg bg-success/20 flex items-center justify-center">
                   <Navigation className="w-5 h-5 text-success" />
                 </div>
@@ -226,8 +404,7 @@ export default function NavigationPage() {
                 </div>
               </div>
 
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="grid grid-cols-3 gap-4">
                 <div className="p-4 rounded-lg bg-muted text-center">
                   <p className="text-2xl font-bold text-foreground">
                     {Math.round(navigationResult.total_distance)}
@@ -247,31 +424,120 @@ export default function NavigationPage() {
                   <p className="text-xs text-muted-foreground">daqiqa</p>
                 </div>
               </div>
+            </Card>
+          )}
 
-              {/* Path Steps */}
-              <div className="space-y-2">
-                <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-                  Yo'l bosqichlari
-                </Label>
-                <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {navigationResult.path.map((step, index) => (
-                    <div
-                      key={index}
-                      className="flex items-start gap-3 p-3 rounded-lg bg-muted"
+          {/* Kiosk Status */}
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'w-3 h-3 rounded-full',
+                kioskWaypointId ? 'bg-success' : 'bg-warning'
+              )} />
+              <div className="flex-1">
+                <p className="text-sm font-medium">
+                  {kioskWaypointId ? 'Kiosk joylashuvi belgilangan' : 'Kiosk joylashuvi belgilanmagan'}
+                </p>
+                {kioskWaypointId && (
+                  <p className="text-xs text-muted-foreground">ID: {kioskWaypointId}</p>
+                )}
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Map Visualization */}
+        <div>
+          {navigating ? (
+            <Card className="p-12 text-center">
+              <div className="animate-pulse">
+                <Navigation className="w-12 h-12 mx-auto text-primary mb-4" />
+                <p className="text-muted-foreground">Yo'l hisoblanmoqda...</p>
+              </div>
+            </Card>
+          ) : navigationResult ? (
+            <Card className="p-4">
+              {/* Floor Navigation Controls */}
+              {floorsInPath.length > 1 && (
+                <div className="mb-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handlePrevFloor}
+                      disabled={currentFloorIndex === 0}
                     >
-                      <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs font-medium">
-                        {index + 1}
-                      </div>
-                      <div className="flex-1">
-                        <p className="text-sm font-medium text-foreground">
-                          {step.instruction || step.label || step.type}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {getFloorName(step.floor_id)} • ({step.x}, {step.y})
-                        </p>
-                      </div>
+                      <ChevronLeft className="w-4 h-4 mr-1" />
+                      Oldingi
+                    </Button>
+                    <span className="text-sm font-medium">
+                      {getFloorName(floorsInPath[currentFloorIndex])}
+                      <span className="text-muted-foreground ml-2">
+                        ({currentFloorIndex + 1}/{floorsInPath.length})
+                      </span>
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleNextFloor}
+                      disabled={currentFloorIndex === floorsInPath.length - 1}
+                    >
+                      Keyingi
+                      <ChevronRight className="w-4 h-4 ml-1" />
+                    </Button>
+                  </div>
+
+                  {/* Floor Slider */}
+                  <div className="px-2">
+                    <Slider
+                      value={[currentFloorIndex]}
+                      min={0}
+                      max={floorsInPath.length - 1}
+                      step={1}
+                      onValueChange={([value]) => setCurrentFloorIndex(value)}
+                    />
+                    <div className="flex justify-between mt-1 text-xs text-muted-foreground">
+                      {floorsInPath.map((floorId, idx) => (
+                        <span
+                          key={floorId}
+                          className={cn(
+                            'cursor-pointer hover:text-foreground transition-colors',
+                            idx === currentFloorIndex && 'text-primary font-medium'
+                          )}
+                          onClick={() => setCurrentFloorIndex(idx)}
+                        >
+                          {getFloorName(floorId)}
+                        </span>
+                      ))}
                     </div>
-                  ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Canvas */}
+              <div className="rounded-lg overflow-hidden border border-border">
+                <canvas ref={canvasRef} />
+              </div>
+
+              {/* Path Steps for Current Floor */}
+              <div className="mt-4 max-h-48 overflow-y-auto">
+                <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                  {getFloorName(floorsInPath[currentFloorIndex])} - Yo'l bosqichlari
+                </Label>
+                <div className="space-y-1 mt-2">
+                  {navigationResult.path
+                    .filter((step) => step.floor_id === floorsInPath[currentFloorIndex])
+                    .map((step, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-2 p-2 rounded bg-muted text-sm"
+                      >
+                        <div className="w-5 h-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-xs">
+                          {index + 1}
+                        </div>
+                        <span>{step.instruction || step.label || step.type}</span>
+                      </div>
+                    ))}
                 </div>
               </div>
             </Card>
@@ -279,7 +545,7 @@ export default function NavigationPage() {
             <Card className="p-12 text-center border-dashed">
               <Navigation className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-medium text-foreground mb-2">
-                Navigatsiya
+                Navigatsiya xaritasi
               </h3>
               <p className="text-muted-foreground">
                 Yo'l ko'rsatish uchun xonani tanlang

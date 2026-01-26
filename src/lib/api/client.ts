@@ -15,6 +15,7 @@ import {
   NavigationResponse,
   Kiosk,
   KioskCreate,
+  KioskUpdate,
   KioskConfig,
   StairsConnection,
   StairsConnectionCreate,
@@ -190,6 +191,34 @@ export const navigationApi = {
     const { data } = await createClient().get(`/api/navigation/nearby-rooms/${waypointId}`, {
       params: { radius },
     });
+    return data;
+  },
+};
+
+// Kiosks CRUD API (Admin)
+export const kiosksApi = {
+  getAll: async (): Promise<Kiosk[]> => {
+    const { data } = await createClient().get(`/api/kiosks/`);
+    return data;
+  },
+
+  getById: async (id: number): Promise<Kiosk> => {
+    const { data } = await createClient().get(`/api/kiosks/${id}`);
+    return data;
+  },
+
+  create: async (kiosk: KioskCreate): Promise<Kiosk> => {
+    const { data } = await createClient().post(`/api/kiosks/`, kiosk);
+    return data;
+  },
+
+  update: async (id: number, kiosk: KioskUpdate): Promise<Kiosk> => {
+    const { data } = await createClient().put(`/api/kiosks/${id}`, kiosk);
+    return data;
+  },
+
+  delete: async (id: number): Promise<string> => {
+    const { data } = await createClient().delete(`/api/kiosks/${id}`);
     return data;
   },
 };

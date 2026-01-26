@@ -24,8 +24,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
-import { floorsApi, waypointsApi, connectionsApi, roomsApi, getApiUrl } from '@/lib/api/client';
-import { Floor, Waypoint, Connection, Room, WaypointType, WaypointCreate, ConnectionCreate } from '@/lib/api/types';
+import { floorsApi, waypointsApi, connectionsApi, roomsApi, kiosksApi, getApiUrl } from '@/lib/api/client';
+import { Floor, Waypoint, Connection, Room, WaypointType, WaypointCreate, ConnectionCreate, Kiosk } from '@/lib/api/types';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +36,8 @@ const WAYPOINT_COLORS: Record<WaypointType, string> = {
   elevator: '#A855F7',
   hall: '#EF4444',
 };
+
+const KIOSK_COLOR = '#EC4899'; // Pink for kiosk points
 
 const WAYPOINT_LABELS: Record<WaypointType, string> = {
   hallway: 'Koridor',
@@ -56,6 +58,7 @@ export default function FloorEditorPage() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [loading, setLoading] = useState(true);
 
   const {
@@ -78,17 +81,19 @@ export default function FloorEditorPage() {
       if (!floorId) return;
       
       try {
-        const [floorData, waypointsData, connectionsData, roomsData] = await Promise.all([
+        const [floorData, waypointsData, connectionsData, roomsData, kiosksData] = await Promise.all([
           floorsApi.getOne(parseInt(floorId)),
           waypointsApi.getByFloor(parseInt(floorId)),
           connectionsApi.getByFloor(parseInt(floorId)),
           roomsApi.getByFloor(parseInt(floorId)),
+          kiosksApi.getAll().then(all => all.filter(k => k.floor_id === parseInt(floorId!))).catch(() => []),
         ]);
         
         setFloor(floorData);
         setWaypoints(waypointsData);
         setConnections(connectionsData);
         setRooms(roomsData);
+        setKiosks(kiosksData);
       } catch (error) {
         toast.error("Ma'lumotlarni yuklashda xato");
       } finally {
@@ -199,21 +204,28 @@ export default function FloorEditorPage() {
       fabricCanvas.remove(obj);
     });
 
+    // Get kiosk waypoint IDs for highlighting
+    const kioskWaypointIds = new Set(kiosks.map(k => k.waypoint_id));
+
     waypoints.forEach((wp) => {
+      const isKiosk = kioskWaypointIds.has(wp.id);
+      const color = isKiosk ? KIOSK_COLOR : WAYPOINT_COLORS[wp.type];
+      const radius = isKiosk ? WAYPOINT_RADIUS + 3 : WAYPOINT_RADIUS;
+
       const circle = new Circle({
         left: wp.x,
         top: wp.y,
-        radius: WAYPOINT_RADIUS,
-        fill: WAYPOINT_COLORS[wp.type],
-        stroke: selectedWaypoint?.id === wp.id ? '#fff' : 'rgba(0,0,0,0.3)',
-        strokeWidth: selectedWaypoint?.id === wp.id ? 3 : 1,
+        radius: radius,
+        fill: color,
+        stroke: selectedWaypoint?.id === wp.id ? '#fff' : isKiosk ? '#fff' : 'rgba(0,0,0,0.3)',
+        strokeWidth: selectedWaypoint?.id === wp.id ? 3 : isKiosk ? 2 : 1,
         selectable: editorMode === 'select',
         evented: true, // Always evented for click detection
         hasControls: false,
         hasBorders: false,
         originX: 'center',
         originY: 'center',
-        data: { waypoint: wp },
+        data: { waypoint: wp, isKiosk },
         // Increase hit area for easier clicking
         padding: 5,
       });
@@ -222,7 +234,7 @@ export default function FloorEditorPage() {
     });
 
     fabricCanvas.renderAll();
-  }, [fabricCanvas, waypoints, selectedWaypoint, editorMode]);
+  }, [fabricCanvas, waypoints, selectedWaypoint, editorMode, kiosks]);
 
   // Update canvas when data changes
   useEffect(() => {
@@ -601,6 +613,17 @@ export default function FloorEditorPage() {
                   </span>
                 </div>
               ))}
+              {/* Kiosk indicator */}
+              <div className="flex items-center gap-2 text-sm pt-2 border-t border-border">
+                <div
+                  className="w-4 h-4 rounded-full"
+                  style={{ backgroundColor: KIOSK_COLOR }}
+                />
+                <span className="text-muted-foreground">Kiosk</span>
+                <span className="ml-auto text-muted-foreground">
+                  {kiosks.length}
+                </span>
+              </div>
             </div>
           </div>
         </div>

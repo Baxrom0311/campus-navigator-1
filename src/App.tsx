@@ -11,6 +11,7 @@ import RoomsPage from "./pages/RoomsPage";
 import NavigationPage from "./pages/NavigationPage";
 import SettingsPage from "./pages/SettingsPage";
 import KioskDisplayPage from "./pages/KioskDisplayPage";
+import KiosksPage from "./pages/KiosksPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -29,6 +30,7 @@ const App = () => (
             <Route path="/floors/:floorId/edit" element={<FloorEditorPage />} />
             <Route path="/waypoints" element={<WaypointsPage />} />
             <Route path="/rooms" element={<RoomsPage />} />
+            <Route path="/kiosks" element={<KiosksPage />} />
             <Route path="/navigation" element={<NavigationPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>

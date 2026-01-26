@@ -14,6 +14,7 @@ const navItems = [
   { path: '/floors', label: 'Qavatlar', icon: Layers },
   { path: '/waypoints', label: 'Nuqtalar', icon: MapPin },
   { path: '/rooms', label: 'Xonalar', icon: DoorOpen },
+  { path: '/kiosks', label: 'Kiosklar', icon: Monitor },
   { path: '/navigation', label: 'Navigatsiya', icon: Navigation },
   { path: '/settings', label: 'Sozlamalar', icon: Settings },
 ];
