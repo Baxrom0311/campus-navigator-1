@@ -34,8 +34,6 @@ export default function RoomsPage() {
   
   const [newRoom, setNewRoom] = useState<Partial<RoomCreate>>({
     name: '',
-    capacity: null,
-    building: null,
     waypoint_id: null,
     floor_id: 0,
   });
@@ -85,8 +83,6 @@ export default function RoomsPage() {
     try {
       const roomToCreate: RoomCreate = {
         name: newRoom.name,
-        capacity: newRoom.capacity || null,
-        building: newRoom.building || null,
         waypoint_id: newRoom.waypoint_id || null,
         floor_id: newRoom.floor_id,
       };
@@ -96,8 +92,6 @@ export default function RoomsPage() {
       setIsCreateOpen(false);
       setNewRoom({
         name: '',
-        capacity: null,
-        building: null,
         waypoint_id: null,
         floor_id: 0,
       });
@@ -125,7 +119,8 @@ export default function RoomsPage() {
     return matchesSearch && matchesFloor;
   });
 
-  const getFloorName = (floorId: number) => {
+  const getFloorName = (floorId: number | null) => {
+    if (!floorId) return '—';
     const floor = floors.find((f) => f.id === floorId);
     return floor?.name || `Qavat ${floorId}`;
   };
@@ -207,26 +202,6 @@ export default function RoomsPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Sig'im</Label>
-                  <Input
-                    type="number"
-                    placeholder="30"
-                    value={newRoom.capacity || ''}
-                    onChange={(e) => setNewRoom({ ...newRoom, capacity: parseInt(e.target.value) || null })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Bino</Label>
-                  <Input
-                    placeholder="A-bino"
-                    value={newRoom.building || ''}
-                    onChange={(e) => setNewRoom({ ...newRoom, building: e.target.value })}
-                  />
-                </div>
-              </div>
-
               <Button onClick={handleCreate} className="w-full">
                 Yaratish
               </Button>
@@ -303,15 +278,6 @@ export default function RoomsPage() {
                 >
                   <Trash2 className="w-4 h-4" />
                 </Button>
-              </div>
-
-              <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground">
-                {room.capacity && (
-                  <span>{room.capacity} o'rin</span>
-                )}
-                {room.building && (
-                  <span>{room.building}</span>
-                )}
               </div>
 
               {room.waypoint_id ? (

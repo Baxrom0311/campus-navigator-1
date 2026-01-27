@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Search, Navigation, MapPin, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, Navigation, MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Canvas as FabricCanvas, FabricImage, Circle, Polyline } from 'fabric';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -132,8 +132,13 @@ export default function NavigationPage() {
     if (floor.image_url) {
       const imageUrl = resolveMediaUrl(floor.image_url);
       
+      const loadImage = async (withCors: boolean) => {
+        const options = withCors ? { crossOrigin: 'anonymous' } : undefined;
+        return await FabricImage.fromURL(imageUrl, options);
+      };
+
       try {
-        const img = await FabricImage.fromURL(imageUrl, { crossOrigin: 'anonymous' });
+        const img = await loadImage(true);
         const canvasWidth = fabricCanvas.width || 700;
         const canvasHeight = fabricCanvas.height || 500;
         
@@ -226,7 +231,102 @@ export default function NavigationPage() {
 
         fabricCanvas.renderAll();
       } catch (error) {
-        console.error('Error loading floor image:', error);
+        try {
+          const img = await loadImage(false);
+          const canvasWidth = fabricCanvas.width || 700;
+          const canvasHeight = fabricCanvas.height || 500;
+
+          const scale = Math.min(
+            canvasWidth / (img.width || 1),
+            canvasHeight / (img.height || 1)
+          ) * 0.95;
+
+          const offsetX = (canvasWidth - (img.width || 0) * scale) / 2;
+          const offsetY = (canvasHeight - (img.height || 0) * scale) / 2;
+
+          img.set({
+            scaleX: scale,
+            scaleY: scale,
+            left: offsetX,
+            top: offsetY,
+            selectable: false,
+            evented: false,
+            opacity: 0.7,
+          });
+
+          fabricCanvas.add(img);
+          fabricCanvas.sendObjectToBack(img);
+
+          // Draw path on this floor
+          if (floorPathSteps.length >= 2) {
+            const points = floorPathSteps.map((step) => ({
+              x: step.x * scale + offsetX,
+              y: step.y * scale + offsetY,
+            }));
+
+            const pathLine = new Polyline(points, {
+              stroke: '#22C55E',
+              strokeWidth: 4,
+              fill: 'transparent',
+              selectable: false,
+              evented: false,
+              strokeDashArray: [10, 5],
+            });
+
+            fabricCanvas.add(pathLine);
+
+            // Start marker
+            const startMarker = new Circle({
+              left: points[0].x,
+              top: points[0].y,
+              radius: 10,
+              fill: '#3B82F6',
+              stroke: '#fff',
+              strokeWidth: 3,
+              originX: 'center',
+              originY: 'center',
+              selectable: false,
+              evented: false,
+            });
+
+            // End marker
+            const endMarker = new Circle({
+              left: points[points.length - 1].x,
+              top: points[points.length - 1].y,
+              radius: 10,
+              fill: '#22C55E',
+              stroke: '#fff',
+              strokeWidth: 3,
+              originX: 'center',
+              originY: 'center',
+              selectable: false,
+              evented: false,
+            });
+
+            fabricCanvas.add(startMarker);
+            fabricCanvas.add(endMarker);
+          } else if (floorPathSteps.length === 1) {
+            // Single point on floor
+            const point = floorPathSteps[0];
+            const marker = new Circle({
+              left: point.x * scale + offsetX,
+              top: point.y * scale + offsetY,
+              radius: 10,
+              fill: '#F59E0B',
+              stroke: '#fff',
+              strokeWidth: 3,
+              originX: 'center',
+              originY: 'center',
+              selectable: false,
+              evented: false,
+            });
+            fabricCanvas.add(marker);
+          }
+
+          fabricCanvas.renderAll();
+        } catch (fallbackError) {
+          console.error('Error loading floor image:', fallbackError);
+        }
       }
     }
   }, [fabricCanvas, navigationResult, floorsInPath, currentFloorIndex, floors, resolveMediaUrl]);
@@ -290,7 +390,8 @@ export default function NavigationPage() {
     }
   };
 
-  const getFloorName = (floorId: number) => {
+  const getFloorName = (floorId: number | null) => {
+    if (!floorId) return 'Qavat belgilanmagan';
     const floor = floors.find((f) => f.id === floorId);
     return floor?.name || `Qavat ${floorId}`;
   };
@@ -365,7 +466,6 @@ export default function NavigationPage() {
                             <h4 className="font-medium text-foreground">{room.name}</h4>
                             <p className="text-sm text-muted-foreground">
                               {getFloorName(room.floor_id)}
-                              {room.building && ` • ${room.building}`}
                             </p>
                           </div>
                           <Button variant="ghost" size="icon">

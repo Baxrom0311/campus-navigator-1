@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2, MapPin, Monitor, Edit2, Check, X } from 'lucide-react';
+import { Plus, Trash2, MapPin, Monitor, Edit2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -32,7 +32,7 @@ import {
 import { useKiosks, useCreateKiosk, useDeleteKiosk, useUpdateKiosk } from '@/hooks/useKiosks';
 import { useQuery } from '@tanstack/react-query';
 import { floorsApi, waypointsApi } from '@/lib/api/client';
-import { Kiosk, Waypoint } from '@/lib/api/types';
+import { Kiosk } from '@/lib/api/types';
 import { cn } from '@/lib/utils';
 
 export default function KiosksPage() {
@@ -66,7 +66,7 @@ export default function KiosksPage() {
   };
 
   const handleSubmit = async () => {
-    if (!formData.name || !formData.floor_id || !formData.waypoint_id) return;
+    if (!formData.name || !formData.floor_id) return;
 
     if (editingId) {
       await updateKiosk.mutateAsync({
@@ -74,7 +74,7 @@ export default function KiosksPage() {
         data: {
           name: formData.name,
           floor_id: parseInt(formData.floor_id),
-          waypoint_id: formData.waypoint_id,
+          waypoint_id: formData.waypoint_id || null,
           description: formData.description || null,
         },
       });
@@ -82,7 +82,7 @@ export default function KiosksPage() {
       await createKiosk.mutateAsync({
         name: formData.name,
         floor_id: parseInt(formData.floor_id),
-        waypoint_id: formData.waypoint_id,
+        waypoint_id: formData.waypoint_id || null,
         description: formData.description || null,
       });
     }
@@ -95,7 +95,7 @@ export default function KiosksPage() {
     setFormData({
       name: kiosk.name,
       floor_id: kiosk.floor_id.toString(),
-      waypoint_id: kiosk.waypoint_id,
+      waypoint_id: kiosk.waypoint_id || '',
       description: kiosk.description || '',
     });
     setSelectedFloorForWaypoints(kiosk.floor_id);
@@ -173,13 +173,16 @@ export default function KiosksPage() {
                 <Label>Nuqta</Label>
                 <Select
                   value={formData.waypoint_id}
-                  onValueChange={(value) => setFormData({ ...formData, waypoint_id: value })}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, waypoint_id: value === 'none' ? '' : value })
+                  }
                   disabled={!selectedFloorForWaypoints}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Nuqtani tanlang" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="none">Biriktirilmasin</SelectItem>
                     {waypoints?.map((wp) => (
                       <SelectItem key={wp.id} value={wp.id}>
                         {wp.label || wp.id} ({wp.type})
@@ -271,7 +274,7 @@ export default function KiosksPage() {
               <div className="mt-4 pt-4 border-t border-border">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <MapPin className="w-4 h-4" />
-                  <span>Nuqta: {kiosk.waypoint_id}</span>
+                  <span>Nuqta: {kiosk.waypoint_id || 'Belgilanmagan'}</span>
                 </div>
                 {kiosk.description && (
                   <p className="mt-2 text-sm text-muted-foreground">

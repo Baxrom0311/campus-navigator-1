@@ -10,8 +10,8 @@ import WaypointsPage from "./pages/WaypointsPage";
 import RoomsPage from "./pages/RoomsPage";
 import NavigationPage from "./pages/NavigationPage";
 import SettingsPage from "./pages/SettingsPage";
-import KioskDisplayPage from "./pages/KioskDisplayPage";
 import KiosksPage from "./pages/KiosksPage";
+import PublicNavigationPage from "./pages/PublicNavigationPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,14 +32,12 @@ const App = () => (
             <Route path="/rooms" element={<RoomsPage />} />
             <Route path="/kiosks" element={<KiosksPage />} />
             <Route path="/navigation" element={<NavigationPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
+        <Route path="/kiosk" element={<PublicNavigationPage />} />
           
-          {/* Kiosk Display (Public - White Theme) */}
-          <Route path="/kiosk" element={<KioskDisplayPage />} />
-          
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

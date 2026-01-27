@@ -12,8 +12,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useAppStore } from '@/lib/store';
-import { setApiUrl, getApiUrl, healthCheck, waypointsApi, floorsApi } from '@/lib/api/client';
-import { Floor, Waypoint } from '@/lib/api/types';
+import { setApiUrl, getApiUrl, healthCheck, kiosksApi } from '@/lib/api/client';
+import type { Kiosk } from '@/lib/api/types';
 import { toast } from 'sonner';
 
 export default function SettingsPage() {
@@ -22,49 +22,38 @@ export default function SettingsPage() {
     setApiUrl: setStoreApiUrl, 
     kioskWaypointId, 
     setKioskWaypointId,
-    kioskId,
-    setKioskId,
     isApiConnected,
     setIsApiConnected,
   } = useAppStore();
 
   const [localApiUrl, setLocalApiUrl] = useState(apiUrl || getApiUrl());
   const [testing, setTesting] = useState(false);
-  const [floors, setFloors] = useState<Floor[]>([]);
-  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [selectedFloorId, setSelectedFloorId] = useState<number | null>(null);
+  const [kiosks, setKiosks] = useState<Kiosk[]>([]);
+  const [selectedKioskId, setSelectedKioskId] = useState<number | null>(null);
 
-  // Fetch floors for kiosk location
-  const fetchFloors = async () => {
+  const fetchKiosks = async () => {
     try {
-      const data = await floorsApi.getAll();
-      setFloors(data.sort((a, b) => a.floor_number - b.floor_number));
+      const data = await kiosksApi.getAll();
+      setKiosks(data.sort((a, b) => a.name.localeCompare(b.name)));
     } catch (error) {
-      console.error('Error fetching floors:', error);
-    }
-  };
-
-  // Fetch waypoints when floor is selected
-  const fetchWaypoints = async (floorId: number) => {
-    try {
-      const data = await waypointsApi.getByFloor(floorId);
-      setWaypoints(data);
-    } catch (error) {
-      console.error('Error fetching waypoints:', error);
+      console.error('Error fetching kiosks:', error);
     }
   };
 
   useEffect(() => {
     if (isApiConnected) {
-      fetchFloors();
+      fetchKiosks();
     }
   }, [isApiConnected]);
 
   useEffect(() => {
-    if (selectedFloorId) {
-      fetchWaypoints(selectedFloorId);
+    if (!kioskWaypointId) {
+      setSelectedKioskId(null);
+      return;
     }
-  }, [selectedFloorId]);
+    const match = kiosks.find((kiosk) => kiosk.waypoint_id === kioskWaypointId);
+    if (match) setSelectedKioskId(match.id);
+  }, [kioskWaypointId, kiosks]);
 
   const handleTestConnection = async () => {
     setTesting(true);
@@ -96,6 +85,22 @@ export default function SettingsPage() {
 
   const handleSaveKioskLocation = () => {
     toast.success('Kiosk joylashuvi saqlandi');
+  };
+
+  const handleSelectKiosk = (value: string) => {
+    const kioskId = parseInt(value, 10);
+    setSelectedKioskId(kioskId);
+    const kiosk = kiosks.find((item) => item.id === kioskId);
+    if (!kiosk) {
+      setKioskWaypointId(null);
+      return;
+    }
+    if (kiosk.waypoint_id) {
+      setKioskWaypointId(kiosk.waypoint_id);
+    } else {
+      setKioskWaypointId(null);
+      toast.error('Tanlangan kiosk uchun nuqta belgilanmagan');
+    }
   };
 
   return (
@@ -178,69 +183,29 @@ export default function SettingsPage() {
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Kiosk ID</Label>
-              <Input
-                placeholder="kiosk_main_entrance"
-                value={kioskId || ''}
-                onChange={(e) => setKioskId(e.target.value || null)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Backend da yaratilgan kiosk ID sini kiriting
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Qavat</Label>
+              <Label>Kiosk</Label>
               <Select
-                value={selectedFloorId?.toString() || ''}
-                onValueChange={(value) => setSelectedFloorId(parseInt(value))}
-                disabled={!isApiConnected}
+                value={selectedKioskId?.toString() || ''}
+                onValueChange={handleSelectKiosk}
+                disabled={!isApiConnected || kiosks.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Qavatni tanlang" />
+                  <SelectValue placeholder="Kioskni tanlang" />
                 </SelectTrigger>
                 <SelectContent>
-                  {floors.map((floor) => (
-                    <SelectItem key={floor.id} value={floor.id.toString()}>
-                      {floor.name}
+                  {kiosks.map((kiosk) => (
+                    <SelectItem key={kiosk.id} value={kiosk.id.toString()}>
+                      {kiosk.name} — Qavat {kiosk.floor_id}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-
-            <div className="space-y-2">
-              <Label>Nuqta (Kiosk joylashuvi)</Label>
-              <Select
-                value={kioskWaypointId || ''}
-                onValueChange={setKioskWaypointId}
-                disabled={!selectedFloorId || waypoints.length === 0}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Nuqtani tanlang" />
-                </SelectTrigger>
-                <SelectContent>
-                  {waypoints.map((wp) => (
-                    <SelectItem key={wp.id} value={wp.id}>
-                      {wp.label || wp.id} - ({wp.x}, {wp.y})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {kioskId && (
-              <div className="p-3 rounded-lg bg-muted text-sm">
-                <p className="text-muted-foreground">
-                  Kiosk ID: <span className="text-foreground font-medium">{kioskId}</span>
-                </p>
-              </div>
-            )}
 
             <Button 
               onClick={handleSaveKioskLocation} 
               className="w-full gap-2"
-              disabled={!kioskId}
+              disabled={!selectedKioskId || !kioskWaypointId}
             >
               <Save className="w-4 h-4" />
               Saqlash

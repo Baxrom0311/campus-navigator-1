@@ -52,14 +52,23 @@ export default function FloorEditorPage() {
   const navigate = useNavigate();
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const connectionAnimationRef = useRef<number | null>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
+  const [imageTransform, setImageTransform] = useState<{
+    scale: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   
   const [floor, setFloor] = useState<Floor | null>(null);
+  const [allFloors, setAllFloors] = useState<Floor[]>([]);
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
   const [loading, setLoading] = useState(true);
+  const [targetWaypoints, setTargetWaypoints] = useState<Waypoint[]>([]);
 
   const {
     editorMode,
@@ -75,21 +84,67 @@ export default function FloorEditorPage() {
   const [zoom, setZoom] = useState(1);
   const [editingWaypoint, setEditingWaypoint] = useState<Waypoint | null>(null);
 
+  const getTransform = () => imageTransform || { scale: 1, offsetX: 0, offsetY: 0 };
+
+  const toCanvasCoords = (x: number, y: number) => {
+    const { scale, offsetX, offsetY } = getTransform();
+    return { x: x * scale + offsetX, y: y * scale + offsetY };
+  };
+
+  const toImageCoords = (x: number, y: number) => {
+    const { scale, offsetX, offsetY } = getTransform();
+    const rawX = (x - offsetX) / scale;
+    const rawY = (y - offsetY) / scale;
+    if (imageSize?.width && imageSize?.height) {
+      return {
+        x: Math.max(0, Math.min(rawX, imageSize.width)),
+        y: Math.max(0, Math.min(rawY, imageSize.height)),
+      };
+    }
+    return { x: rawX, y: rawY };
+  };
+
+  const stopConnectionAnimation = useCallback(() => {
+    if (connectionAnimationRef.current !== null) {
+      cancelAnimationFrame(connectionAnimationRef.current);
+      connectionAnimationRef.current = null;
+    }
+  }, []);
+
+  const startConnectionAnimation = useCallback(() => {
+    if (!fabricCanvas) return;
+    stopConnectionAnimation();
+    let offset = 0;
+    const animate = () => {
+      offset = (offset + 1) % 1000;
+      fabricCanvas.getObjects().forEach((obj) => {
+        if ((obj as any).isConnection) {
+          obj.set('strokeDashOffset', offset);
+        }
+      });
+      fabricCanvas.requestRenderAll();
+      connectionAnimationRef.current = requestAnimationFrame(animate);
+    };
+    connectionAnimationRef.current = requestAnimationFrame(animate);
+  }, [fabricCanvas, stopConnectionAnimation]);
+
   // Fetch data
   useEffect(() => {
     const fetchData = async () => {
       if (!floorId) return;
       
       try {
-        const [floorData, waypointsData, connectionsData, roomsData, kiosksData] = await Promise.all([
+        const [floorData, waypointsData, connectionsData, roomsData, kiosksData, floorsData] = await Promise.all([
           floorsApi.getOne(parseInt(floorId)),
           waypointsApi.getByFloor(parseInt(floorId)),
           connectionsApi.getByFloor(parseInt(floorId)),
           roomsApi.getByFloor(parseInt(floorId)),
           kiosksApi.getAll().then(all => all.filter(k => k.floor_id === parseInt(floorId!))).catch(() => []),
+          floorsApi.getAll().catch(() => []),
         ]);
         
         setFloor(floorData);
+        setAllFloors(floorsData.sort((a, b) => a.floor_number - b.floor_number));
         setWaypoints(waypointsData);
         setConnections(connectionsData);
         setRooms(roomsData);
@@ -103,6 +158,18 @@ export default function FloorEditorPage() {
 
     fetchData();
   }, [floorId]);
+
+  useEffect(() => {
+    if (!editingWaypoint?.connects_to_floor) {
+      setTargetWaypoints([]);
+      return;
+    }
+
+    waypointsApi
+      .getByFloor(editingWaypoint.connects_to_floor)
+      .then((data) => setTargetWaypoints(data))
+      .catch(() => setTargetWaypoints([]));
+  }, [editingWaypoint?.connects_to_floor]);
 
   // Initialize canvas
   useEffect(() => {
@@ -124,7 +191,12 @@ export default function FloorEditorPage() {
 
   // Load floor image
   useEffect(() => {
-    if (!fabricCanvas || !floor?.image_url) return;
+    if (!fabricCanvas) return;
+    if (!floor?.image_url) {
+      setImageTransform(null);
+      setImageSize(null);
+      return;
+    }
 
     const resolveMediaUrl = (url: string) => {
       if (/^https?:\/\//i.test(url)) return url;
@@ -135,7 +207,19 @@ export default function FloorEditorPage() {
 
     const imageUrl = resolveMediaUrl(floor.image_url);
 
-    FabricImage.fromURL(imageUrl, { crossOrigin: 'anonymous' }).then((img) => {
+    const loadImage = async (withCors: boolean) => {
+      const options = withCors ? { crossOrigin: 'anonymous' } : undefined;
+      return await FabricImage.fromURL(imageUrl, options);
+    };
+
+    const applyImage = (img: FabricImage) => {
+      // Remove existing background images
+      fabricCanvas.getObjects().forEach((obj) => {
+        if (obj.type === 'image') {
+          fabricCanvas.remove(obj);
+        }
+      });
+
       // Scale image to fit canvas
       const canvasWidth = fabricCanvas.width || 1200;
       const canvasHeight = fabricCanvas.height || 800;
@@ -143,11 +227,14 @@ export default function FloorEditorPage() {
       const scale =
         Math.min(canvasWidth / (img.width || 1), canvasHeight / (img.height || 1)) * 0.9;
 
+      const offsetX = (canvasWidth - (img.width || 0) * scale) / 2;
+      const offsetY = (canvasHeight - (img.height || 0) * scale) / 2;
+
       img.set({
         scaleX: scale,
         scaleY: scale,
-        left: (canvasWidth - (img.width || 0) * scale) / 2,
-        top: (canvasHeight - (img.height || 0) * scale) / 2,
+        left: offsetX,
+        top: offsetY,
         selectable: false,
         evented: false,
       });
@@ -155,7 +242,21 @@ export default function FloorEditorPage() {
       fabricCanvas.add(img);
       fabricCanvas.sendObjectToBack(img);
       fabricCanvas.renderAll();
-    });
+      setImageTransform({ scale, offsetX, offsetY });
+      setImageSize({ width: img.width || 0, height: img.height || 0 });
+    };
+
+    loadImage(true)
+      .then(applyImage)
+      .catch(() => {
+        loadImage(false)
+          .then(applyImage)
+          .catch(() => {
+            setImageTransform(null);
+            setImageSize(null);
+            toast.error("Rasmni yuklashda xato");
+          });
+      });
   }, [fabricCanvas, floor?.image_url]);
 
   // Draw connections
@@ -172,26 +273,38 @@ export default function FloorEditorPage() {
       const toWp = waypoints.find((w) => w.id === conn.to_waypoint_id);
       
       if (fromWp && toWp) {
-        const line = new Line([fromWp.x, fromWp.y, toWp.x, toWp.y], {
-          stroke: '#4A90D9',
-          strokeWidth: 2,
+        const fromPoint = toCanvasCoords(fromWp.x, fromWp.y);
+        const toPoint = toCanvasCoords(toWp.x, toWp.y);
+        const line = new Line([fromPoint.x, fromPoint.y, toPoint.x, toPoint.y], {
+          stroke: '#38BDF8',
+          strokeWidth: 3,
+          strokeLineCap: 'round',
+          strokeDashArray: [12, 8],
+          strokeDashOffset: 0,
           selectable: false,
           evented: false,
-          opacity: 0.6,
+          opacity: 0.85,
         });
+        (line as any).isConnection = true;
         
         fabricCanvas.add(line);
-        // Move line behind other objects
-        const objects = fabricCanvas.getObjects();
-        const lineIndex = objects.indexOf(line);
-        if (lineIndex > 0) {
-          fabricCanvas.moveObjectTo(line, 0);
-        }
       }
     });
 
     fabricCanvas.renderAll();
-  }, [fabricCanvas, connections, waypoints]);
+    if (connections.length > 0) {
+      startConnectionAnimation();
+    } else {
+      stopConnectionAnimation();
+    }
+  }, [
+    fabricCanvas,
+    connections,
+    waypoints,
+    imageTransform,
+    startConnectionAnimation,
+    stopConnectionAnimation,
+  ]);
 
   // Draw waypoints
   const WAYPOINT_RADIUS = 10;
@@ -205,16 +318,19 @@ export default function FloorEditorPage() {
     });
 
     // Get kiosk waypoint IDs for highlighting
-    const kioskWaypointIds = new Set(kiosks.map(k => k.waypoint_id));
+    const kioskWaypointIds = new Set(
+      kiosks.map((k) => k.waypoint_id).filter((id): id is string => !!id)
+    );
 
     waypoints.forEach((wp) => {
       const isKiosk = kioskWaypointIds.has(wp.id);
       const color = isKiosk ? KIOSK_COLOR : WAYPOINT_COLORS[wp.type];
       const radius = isKiosk ? WAYPOINT_RADIUS + 3 : WAYPOINT_RADIUS;
+      const canvasPoint = toCanvasCoords(wp.x, wp.y);
 
       const circle = new Circle({
-        left: wp.x,
-        top: wp.y,
+        left: canvasPoint.x,
+        top: canvasPoint.y,
         radius: radius,
         fill: color,
         stroke: selectedWaypoint?.id === wp.id ? '#fff' : isKiosk ? '#fff' : 'rgba(0,0,0,0.3)',
@@ -234,13 +350,17 @@ export default function FloorEditorPage() {
     });
 
     fabricCanvas.renderAll();
-  }, [fabricCanvas, waypoints, selectedWaypoint, editorMode, kiosks]);
+  }, [fabricCanvas, waypoints, selectedWaypoint, editorMode, kiosks, imageTransform]);
 
   // Update canvas when data changes
   useEffect(() => {
     drawConnections();
     drawWaypoints();
   }, [drawConnections, drawWaypoints]);
+
+  useEffect(() => {
+    return () => stopConnectionAnimation();
+  }, [stopConnectionAnimation]);
 
   // Handle canvas click
   useEffect(() => {
@@ -251,12 +371,17 @@ export default function FloorEditorPage() {
       const target = fabricCanvas.findTarget(e.e);
 
       if (editorMode === 'waypoint') {
+        if (floor?.image_url && !imageTransform) {
+          toast.error("Rasm yuklanmoqda, iltimos kuting");
+          return;
+        }
+        const imagePoint = toImageCoords(pointer.x, pointer.y);
         // Create new waypoint
         const newWaypoint: WaypointCreate = {
           id: `wp_${Date.now()}`,
           floor_id: parseInt(floorId!),
-          x: Math.round(pointer.x),
-          y: Math.round(pointer.y),
+          x: Math.round(imagePoint.x),
+          y: Math.round(imagePoint.y),
           type: selectedWaypointType,
         };
 
@@ -332,7 +457,16 @@ export default function FloorEditorPage() {
     return () => {
       fabricCanvas.off('mouse:down', handleMouseDown);
     };
-  }, [fabricCanvas, editorMode, selectedWaypointType, connectionStartWaypoint, floorId]);
+  }, [
+    fabricCanvas,
+    editorMode,
+    selectedWaypointType,
+    connectionStartWaypoint,
+    floorId,
+    imageTransform,
+    imageSize,
+    floor?.image_url,
+  ]);
 
   // Handle object moving (drag waypoint)
   useEffect(() => {
@@ -340,14 +474,16 @@ export default function FloorEditorPage() {
 
     const handleObjectMoving = (e: any) => {
       if (editorMode !== 'select') return;
+      if (floor?.image_url && !imageTransform) return;
       
       const target = e.target;
       const wpData = target?.data?.waypoint as Waypoint | undefined;
       
       if (wpData) {
         // Using center origin, so position is the center
-        wpData.x = Math.round(target.left);
-        wpData.y = Math.round(target.top);
+        const imagePoint = toImageCoords(target.left, target.top);
+        wpData.x = Math.round(imagePoint.x);
+        wpData.y = Math.round(imagePoint.y);
       }
     };
 
@@ -357,8 +493,10 @@ export default function FloorEditorPage() {
       
       if (wpData) {
         try {
-          const newX = Math.round(target.left);
-          const newY = Math.round(target.top);
+          if (floor?.image_url && !imageTransform) return;
+          const imagePoint = toImageCoords(target.left, target.top);
+          const newX = Math.round(imagePoint.x);
+          const newY = Math.round(imagePoint.y);
           
           await waypointsApi.update(wpData.id, {
             x: newX,
@@ -385,7 +523,7 @@ export default function FloorEditorPage() {
       fabricCanvas.off('object:moving', handleObjectMoving);
       fabricCanvas.off('object:modified', handleObjectModified);
     };
-  }, [fabricCanvas, editorMode]);
+  }, [fabricCanvas, editorMode, imageTransform, imageSize, floor?.image_url]);
 
   // Zoom functions
   const handleZoomIn = () => {
@@ -420,6 +558,8 @@ export default function FloorEditorPage() {
       await waypointsApi.update(editingWaypoint.id, {
         label: editingWaypoint.label,
         type: editingWaypoint.type,
+        connects_to_floor: editingWaypoint.connects_to_floor ?? null,
+        connects_to_waypoint: editingWaypoint.connects_to_waypoint ?? null,
       });
       
       setWaypoints((prev) =>
@@ -698,6 +838,59 @@ export default function FloorEditorPage() {
                   <Input value={editingWaypoint.y} disabled />
                 </div>
               </div>
+
+              {(editingWaypoint.type === 'stairs' || editingWaypoint.type === 'elevator') && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Bog'langan qavat</Label>
+                    <Select
+                      value={editingWaypoint.connects_to_floor?.toString() || ''}
+                      onValueChange={(value) =>
+                        setEditingWaypoint({
+                          ...editingWaypoint,
+                          connects_to_floor: value ? Number(value) : null,
+                          connects_to_waypoint: null,
+                        })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Qavatni tanlang" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allFloors.map((floorItem) => (
+                          <SelectItem key={floorItem.id} value={floorItem.id.toString()}>
+                            {floorItem.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Bog'langan nuqta</Label>
+                    <Select
+                      value={editingWaypoint.connects_to_waypoint || ''}
+                      onValueChange={(value) =>
+                        setEditingWaypoint({
+                          ...editingWaypoint,
+                          connects_to_waypoint: value,
+                        })
+                      }
+                      disabled={!editingWaypoint.connects_to_floor}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Nuqtani tanlang" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {targetWaypoints.map((wp) => (
+                          <SelectItem key={wp.id} value={wp.id}>
+                            {wp.label || wp.id} ({wp.x}, {wp.y})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
 
               {/* Room linking for room-type waypoints */}
               {editingWaypoint.type === 'room' && (

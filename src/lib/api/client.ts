@@ -16,12 +16,6 @@ import {
   Kiosk,
   KioskCreate,
   KioskUpdate,
-  KioskConfig,
-  StairsConnection,
-  StairsConnectionCreate,
-  KioskNavigationRequest,
-  KioskNavigationResponse,
-  KioskSearchResult,
 } from './types';
 
 const API_URL_KEY = 'university_nav_api_url';
@@ -164,11 +158,6 @@ export const roomsApi = {
     return data;
   },
 
-  createBatch: async (rooms: RoomCreate[]): Promise<Room[]> => {
-    const { data } = await createClient().post(`/api/rooms/batch`, rooms);
-    return data;
-  },
-
   update: async (id: number | string, room: RoomUpdate): Promise<Room> => {
     const { data } = await createClient().put(`/api/rooms/${id}`, room);
     return data;
@@ -219,51 +208,6 @@ export const kiosksApi = {
 
   delete: async (id: number): Promise<string> => {
     const { data } = await createClient().delete(`/api/kiosks/${id}`);
-    return data;
-  },
-};
-
-// Kiosk API
-export const kioskApi = {
-  // Get kiosk config
-  getConfig: async (kioskId: string): Promise<KioskConfig> => {
-    const { data } = await createClient().get(`/api/kiosk/config/${kioskId}`);
-    return data;
-  },
-
-  // List all kiosks
-  getAll: async (): Promise<Kiosk[]> => {
-    const { data } = await createClient().get(`/api/kiosk/list`);
-    return data;
-  },
-
-  // Create kiosk
-  create: async (kiosk: KioskCreate): Promise<Kiosk> => {
-    const { data } = await createClient().post(`/api/kiosk/`, kiosk);
-    return data;
-  },
-
-  // Navigate from kiosk to room
-  navigate: async (request: KioskNavigationRequest): Promise<KioskNavigationResponse> => {
-    const { data } = await createClient().post(`/api/kiosk/navigate`, request);
-    return data;
-  },
-
-  // Search rooms for kiosk
-  searchRooms: async (query: string): Promise<KioskSearchResult[]> => {
-    const { data } = await createClient().get(`/api/kiosk/search`, { params: { q: query } });
-    return data;
-  },
-
-  // Stairs connections
-  getStairsConnections: async (stairsName?: string): Promise<StairsConnection[]> => {
-    const params = stairsName ? { stairs_name: stairsName } : {};
-    const { data } = await createClient().get(`/api/kiosk/stairs-connections`, { params });
-    return data;
-  },
-
-  createStairsConnection: async (connection: StairsConnectionCreate): Promise<StairsConnection> => {
-    const { data } = await createClient().post(`/api/kiosk/stairs-connections`, connection);
     return data;
   },
 };
