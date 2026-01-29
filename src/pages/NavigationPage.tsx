@@ -8,7 +8,7 @@ import {
   Map as MapIcon,
   Monitor,
 } from 'lucide-react';
-import { Canvas as FabricCanvas, FabricImage, Circle, Polyline } from 'fabric';
+import { Canvas as FabricCanvas, FabricImage, Circle, Polyline, Group, Rect, Text } from 'fabric';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,8 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { roomsApi, navigationApi, floorsApi, kiosksApi, getApiUrl } from '@/lib/api/client';
-import { Room, Floor, NavigationResponse, PathStep, Kiosk } from '@/lib/api/types';
+import { roomsApi, navigationApi, floorsApi, kiosksApi, waypointsApi, getApiUrl } from '@/lib/api/client';
+import { Room, Floor, NavigationResponse, PathStep, Kiosk, Waypoint } from '@/lib/api/types';
 import { toast } from 'sonner';
 import { logger } from '@/lib/logger';
 import { cn } from '@/lib/utils';
@@ -31,6 +31,7 @@ export default function NavigationPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [kiosks, setKiosks] = useState<Kiosk[]>([]);
+  const [floorWaypoints, setFloorWaypoints] = useState<Waypoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [startMode, setStartMode] = useState<'kiosk' | 'room'>('kiosk');
   const [selectedKioskId, setSelectedKioskId] = useState<number | null>(null);
@@ -52,6 +53,16 @@ export default function NavigationPage() {
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const fabricCanvasRef = useRef<FabricCanvas | null>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const dashOffsetRef = useRef(0);
+  const moverRef = useRef<Group | null>(null);
+  const pathLineRef = useRef<Polyline | null>(null);
+  const kioskPulseRefs = useRef<Circle[]>([]);
+  const pathPointsRef = useRef<{ x: number; y: number }[]>([]);
+  const segmentLengthsRef = useRef<number[]>([]);
+  const totalLengthRef = useRef(0);
+  const progressRef = useRef(0);
+  const lastTimeRef = useRef<number | null>(null);
 
   // Fetch initial data
   useEffect(() => {
@@ -81,6 +92,27 @@ export default function NavigationPage() {
       setStartMode('room');
     }
   }, [kiosks.length]);
+
+  useEffect(() => {
+    if (!navigationResult || floorsInPath.length === 0) {
+      setFloorWaypoints([]);
+      return;
+    }
+    const floorId = floorsInPath[currentFloorIndex];
+    if (!floorId) return;
+    let isActive = true;
+    waypointsApi
+      .getByFloor(floorId)
+      .then((data) => {
+        if (isActive) setFloorWaypoints(data);
+      })
+      .catch(() => {
+        if (isActive) setFloorWaypoints([]);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [navigationResult, floorsInPath, currentFloorIndex]);
 
   // Initialize canvas when map view is visible
   useEffect(() => {
@@ -133,12 +165,66 @@ export default function NavigationPage() {
     return `${base}${path}`;
   }, []);
 
+  const stopPathAnimation = useCallback(() => {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    lastTimeRef.current = null;
+    progressRef.current = 0;
+  }, []);
+
+  const computePathMetrics = useCallback((points: { x: number; y: number }[]) => {
+    const lengths: number[] = [];
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      const len = Math.hypot(dx, dy);
+      lengths.push(len);
+      total += len;
+    }
+    return { lengths, total };
+  }, []);
+
+  const getPointAtDistance = useCallback(
+    (distance: number) => {
+      const points = pathPointsRef.current;
+      const lengths = segmentLengthsRef.current;
+      if (points.length === 0 || lengths.length === 0) return points[0] || null;
+      let remaining = Math.max(0, distance);
+      for (let i = 0; i < lengths.length; i += 1) {
+        const len = lengths[i];
+        if (len === 0) continue;
+        if (remaining <= len) {
+          const start = points[i];
+          const end = points[i + 1];
+          const t = remaining / len;
+          return {
+            x: start.x + (end.x - start.x) * t,
+            y: start.y + (end.y - start.y) * t,
+          };
+        }
+        remaining -= len;
+      }
+      return points[points.length - 1] || null;
+    },
+    []
+  );
+
   // Keep canvas responsive to container size
   const drawFloorWithPath = useCallback(async () => {
     if (!fabricCanvas || !navigationResult || floorsInPath.length === 0) return;
 
     const currentFloorId = floorsInPath[currentFloorIndex];
     const floor = floors.find((f) => f.id === currentFloorId) || null;
+
+    stopPathAnimation();
+    moverRef.current = null;
+    pathLineRef.current = null;
+    pathPointsRef.current = [];
+    segmentLengthsRef.current = [];
+    totalLengthRef.current = 0;
 
     // Clear canvas
     fabricCanvas.clear();
@@ -197,14 +283,15 @@ export default function NavigationPage() {
         fabricCanvas.sendObjectToBack(img);
       }
 
-      const toCanvasPoint = (step: PathStep) => ({
-        x: (step.x - frame.offsetX) * scale + offsetX,
-        y: (step.y - frame.offsetY) * scale + offsetY,
+      const toCanvasPoint = (point: { x: number; y: number }) => ({
+        x: (point.x - frame.offsetX) * scale + offsetX,
+        y: (point.y - frame.offsetY) * scale + offsetY,
       });
 
       // Draw path on this floor
       if (floorPathSteps.length >= 2) {
         const points = floorPathSteps.map((step) => toCanvasPoint(step));
+        pathPointsRef.current = points;
 
         const pathLine = new Polyline(points, {
           stroke: '#22C55E',
@@ -212,10 +299,37 @@ export default function NavigationPage() {
           fill: 'transparent',
           selectable: false,
           evented: false,
-          strokeDashArray: [10, 5],
+          strokeDashArray: [2, 10],
+          strokeLineCap: 'round',
         });
 
         fabricCanvas.add(pathLine);
+        pathLineRef.current = pathLine;
+
+        const { lengths, total } = computePathMetrics(points);
+        segmentLengthsRef.current = lengths;
+        totalLengthRef.current = total;
+        dashOffsetRef.current = 0;
+        progressRef.current = 0;
+        lastTimeRef.current = null;
+
+        const maxDots = 60;
+        const step = Math.max(1, Math.ceil(points.length / maxDots));
+        points.forEach((point, index) => {
+          if (index === 0 || index === points.length - 1) return;
+          if (index % step !== 0) return;
+          const dot = new Circle({
+            left: point.x,
+            top: point.y,
+            radius: 3,
+            fill: '#a7f3d0',
+            originX: 'center',
+            originY: 'center',
+            selectable: false,
+            evented: false,
+          });
+          fabricCanvas.add(dot);
+        });
 
         // Start marker
         const startMarker = new Circle({
@@ -247,6 +361,93 @@ export default function NavigationPage() {
 
         fabricCanvas.add(startMarker);
         fabricCanvas.add(endMarker);
+
+        const head = new Circle({
+          left: 0,
+          top: -6,
+          radius: 4,
+          fill: '#f8fafc',
+          originX: 'center',
+          originY: 'center',
+          selectable: false,
+          evented: false,
+        });
+        const body = new Rect({
+          left: 0,
+          top: 4,
+          width: 9,
+          height: 12,
+          rx: 4,
+          ry: 4,
+          fill: '#38bdf8',
+          originX: 'center',
+          originY: 'center',
+          selectable: false,
+          evented: false,
+        });
+        const mover = new Group([body, head], {
+          left: points[0].x,
+          top: points[0].y,
+          originX: 'center',
+          originY: 'center',
+          selectable: false,
+          evented: false,
+        });
+        mover.set('shadow', {
+          color: 'rgba(56,189,248,0.6)',
+          blur: 12,
+          offsetX: 0,
+          offsetY: 0,
+        });
+        fabricCanvas.add(mover);
+        moverRef.current = mover;
+
+        const animate = (time: number) => {
+          const totalLength = totalLengthRef.current;
+          if (!totalLength || !pathLineRef.current || !moverRef.current) {
+            stopPathAnimation();
+            return;
+          }
+          if (!lastTimeRef.current) lastTimeRef.current = time;
+          const elapsed = (time - lastTimeRef.current) / 1000;
+          lastTimeRef.current = time;
+
+          const speed = 70;
+          progressRef.current = Math.min(totalLength, progressRef.current + speed * elapsed);
+          if (progressRef.current < totalLength) {
+            dashOffsetRef.current -= speed * elapsed * 0.25;
+            pathLineRef.current.set('strokeDashOffset', dashOffsetRef.current);
+          }
+
+          const nextPoint = getPointAtDistance(progressRef.current);
+          if (nextPoint) {
+            moverRef.current.set({
+              left: nextPoint.x,
+              top: nextPoint.y,
+            });
+            moverRef.current.setCoords();
+          }
+
+          if (kioskPulseRefs.current.length > 0) {
+            const pulse = (Math.sin(time / 250) + 1) / 2;
+            kioskPulseRefs.current.forEach((ring) => {
+              ring.set({
+                radius: 10 + pulse * 6,
+                opacity: 0.35 + pulse * 0.35,
+              });
+            });
+          }
+
+          fabricCanvas.requestRenderAll();
+
+          if (progressRef.current >= totalLength && kioskPulseRefs.current.length === 0) {
+            stopPathAnimation();
+            return;
+          }
+          animationFrameRef.current = requestAnimationFrame(animate);
+        };
+
+        animationFrameRef.current = requestAnimationFrame(animate);
       } else if (floorPathSteps.length === 1) {
         // Single point on floor
         const point = toCanvasPoint(floorPathSteps[0]);
@@ -263,6 +464,103 @@ export default function NavigationPage() {
           evented: false,
         });
         fabricCanvas.add(marker);
+      }
+
+      kioskPulseRefs.current = [];
+
+      if (floorWaypoints.length > 0) {
+        const waypointMap = new Map(floorWaypoints.map((wp) => [wp.id, wp]));
+        const floorRooms = rooms.filter(
+          (room) => room.floor_id === currentFloorId && room.waypoint_id
+        );
+
+        floorRooms.forEach((room) => {
+          const wp = room.waypoint_id ? waypointMap.get(room.waypoint_id) : null;
+          if (!wp) return;
+          const point = toCanvasPoint({ x: wp.x, y: wp.y });
+          const labelText = new Text(room.name, {
+            left: 0,
+            top: 0,
+            fontSize: 12,
+            fontWeight: '600',
+            fill: '#f8fafc',
+            fontFamily: '"Plus Jakarta Sans", "Inter", sans-serif',
+            selectable: false,
+            evented: false,
+          });
+          const pad = 4;
+          const textWidth = Math.ceil(labelText.width ?? labelText.getScaledWidth() ?? 0);
+          const textHeight = Math.ceil(labelText.height ?? labelText.getScaledHeight() ?? 0);
+          const bg = new Rect({
+            left: -pad,
+            top: -pad,
+            width: textWidth + pad * 2,
+            height: textHeight + pad * 2,
+            rx: 4,
+            ry: 4,
+            fill: 'rgba(15,23,42,0.65)',
+            stroke: 'rgba(255,255,255,0.12)',
+            strokeWidth: 1,
+            selectable: false,
+            evented: false,
+          });
+          const labelGroup = new Group([bg, labelText], {
+            left: point.x + 8,
+            top: point.y - textHeight - 10,
+            originX: 'left',
+            originY: 'top',
+            selectable: false,
+            evented: false,
+          });
+          fabricCanvas.add(labelGroup);
+        });
+
+        kiosks
+          .filter((kiosk) => kiosk.floor_id === currentFloorId && kiosk.waypoint_id)
+          .forEach((kiosk) => {
+            const wp = kiosk.waypoint_id ? waypointMap.get(kiosk.waypoint_id) : null;
+            if (!wp) return;
+            const point = toCanvasPoint({ x: wp.x, y: wp.y });
+
+            const ring = new Circle({
+              left: point.x,
+              top: point.y,
+              radius: 10,
+              fill: 'rgba(14,165,233,0.15)',
+              stroke: 'rgba(14,165,233,0.8)',
+              strokeWidth: 2,
+              originX: 'center',
+              originY: 'center',
+              selectable: false,
+              evented: false,
+            });
+            const core = new Circle({
+              left: point.x,
+              top: point.y,
+              radius: 5,
+              fill: '#0ea5e9',
+              stroke: '#f8fafc',
+              strokeWidth: 2,
+              originX: 'center',
+              originY: 'center',
+              selectable: false,
+              evented: false,
+            });
+            const label = new Text('Kiosk', {
+              left: point.x + 10,
+              top: point.y + 8,
+              fontSize: 11,
+              fontWeight: '600',
+              fill: '#bae6fd',
+              fontFamily: '"Plus Jakarta Sans", "Inter", sans-serif',
+              selectable: false,
+              evented: false,
+            });
+            fabricCanvas.add(ring);
+            fabricCanvas.add(core);
+            fabricCanvas.add(label);
+            kioskPulseRefs.current.push(ring);
+          });
       }
 
       fabricCanvas.renderAll();
@@ -292,7 +590,20 @@ export default function NavigationPage() {
     } else {
       renderScene(null);
     }
-  }, [fabricCanvas, navigationResult, floorsInPath, currentFloorIndex, floors, resolveMediaUrl]);
+  }, [
+    fabricCanvas,
+    navigationResult,
+    floorsInPath,
+    currentFloorIndex,
+    floors,
+    resolveMediaUrl,
+    computePathMetrics,
+    getPointAtDistance,
+    stopPathAnimation,
+    rooms,
+    kiosks,
+    floorWaypoints,
+  ]);
 
   useEffect(() => {
     if (!fabricCanvas) return;
@@ -314,7 +625,10 @@ export default function NavigationPage() {
     const observer = new ResizeObserver(handleResize);
     observer.observe(container);
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      stopPathAnimation();
+    };
   }, [fabricCanvas, drawFloorWithPath]);
 
   // Auto-select first kiosk for convenience
