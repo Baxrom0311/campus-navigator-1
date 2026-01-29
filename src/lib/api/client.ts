@@ -25,20 +25,40 @@ import {
 const API_URL_KEY = 'university_nav_api_url';
 const ADMIN_TOKEN_KEY = 'university_nav_admin_token';
 
+const normalizeApiUrl = (raw: string): string => {
+  const trimmed = raw.trim();
+  if (!trimmed) return config.apiUrl;
+  let url = trimmed;
+  if (!/^https?:\/\//i.test(url)) {
+    url = `http://${url}`;
+  }
+  url = url.replace(/\/+$/, '');
+  url = url.replace(/\/api$/, '');
+  return url;
+};
+
+const ensureArray = <T>(data: unknown, label: string): T[] => {
+  if (Array.isArray(data)) return data as T[];
+  const error = new Error(`Invalid ${label} response: expected array`);
+  logger.apiError(label, error);
+  throw error;
+};
+
 /**
  * Get API URL from storage or use default from config
  */
 export const getApiUrl = (): string => {
   const stored = sessionStorage.getItem(API_URL_KEY) || localStorage.getItem(API_URL_KEY);
-  return stored || config.apiUrl;
+  return normalizeApiUrl(stored || config.apiUrl);
 };
 
 /**
  * Set API URL in storage
  */
 export const setApiUrl = (url: string): void => {
-  sessionStorage.setItem(API_URL_KEY, url);
-  localStorage.setItem(API_URL_KEY, url);
+  const normalized = normalizeApiUrl(url);
+  sessionStorage.setItem(API_URL_KEY, normalized);
+  localStorage.setItem(API_URL_KEY, normalized);
 };
 
 /**
@@ -108,7 +128,7 @@ const createClient = (): AxiosInstance => {
 export const floorsApi = {
   getAll: async (skip = 0, limit = 100): Promise<Floor[]> => {
     const { data } = await createClient().get(`/api/floors/`, { params: { skip, limit } });
-    return data;
+    return ensureArray<Floor>(data, 'floors.getAll');
   },
 
   getOne: async (id: number): Promise<Floor> => {
@@ -145,7 +165,7 @@ export const floorsApi = {
 export const waypointsApi = {
   getByFloor: async (floorId: number): Promise<Waypoint[]> => {
     const { data } = await createClient().get(`/api/waypoints/floor/${floorId}`);
-    return data;
+    return ensureArray<Waypoint>(data, 'waypoints.getByFloor');
   },
 
   getOne: async (id: string): Promise<Waypoint> => {
@@ -160,7 +180,7 @@ export const waypointsApi = {
 
   createBatch: async (waypoints: WaypointCreate[]): Promise<Waypoint[]> => {
     const { data } = await createClient().post(`/api/waypoints/batch`, waypoints);
-    return data;
+    return ensureArray<Waypoint>(data, 'waypoints.createBatch');
   },
 
   update: async (id: string, waypoint: WaypointUpdate): Promise<Waypoint> => {
@@ -178,7 +198,7 @@ export const waypointsApi = {
 export const connectionsApi = {
   getByFloor: async (floorId: number): Promise<Connection[]> => {
     const { data } = await createClient().get(`/api/waypoints/connections/floor/${floorId}`);
-    return data;
+    return ensureArray<Connection>(data, 'connections.getByFloor');
   },
 
   create: async (connection: ConnectionCreate): Promise<Connection> => {
@@ -188,7 +208,7 @@ export const connectionsApi = {
 
   createBatch: async (connections: ConnectionCreate[]): Promise<Connection[]> => {
     const { data } = await createClient().post(`/api/waypoints/connections/batch`, connections);
-    return data;
+    return ensureArray<Connection>(data, 'connections.createBatch');
   },
 
   delete: async (id: string): Promise<string> => {
@@ -201,17 +221,17 @@ export const connectionsApi = {
 export const roomsApi = {
   getAll: async (skip = 0, limit = 1000): Promise<Room[]> => {
     const { data } = await createClient().get(`/api/rooms/`, { params: { skip, limit } });
-    return data;
+    return ensureArray<Room>(data, 'rooms.getAll');
   },
 
   getByFloor: async (floorId: number): Promise<Room[]> => {
     const { data } = await createClient().get(`/api/rooms/floor/${floorId}`);
-    return data;
+    return ensureArray<Room>(data, 'rooms.getByFloor');
   },
 
   search: async (query: string): Promise<Room[]> => {
     const { data } = await createClient().get(`/api/rooms/search`, { params: { query } });
-    return data;
+    return ensureArray<Room>(data, 'rooms.search');
   },
 
   getOne: async (id: number): Promise<Room> => {
@@ -246,7 +266,7 @@ export const navigationApi = {
     const { data } = await createClient().get(`/api/navigation/nearby-rooms/${waypointId}`, {
       params: { radius },
     });
-    return data;
+    return ensureArray<Room>(data, 'navigation.getNearbyRooms');
   },
 
   audit: async (): Promise<MapAuditResponse> => {
@@ -259,7 +279,7 @@ export const navigationApi = {
 export const kiosksApi = {
   getAll: async (): Promise<Kiosk[]> => {
     const { data } = await createClient().get(`/api/kiosks/`);
-    return data;
+    return ensureArray<Kiosk>(data, 'kiosks.getAll');
   },
 
   getById: async (id: number): Promise<Kiosk> => {
